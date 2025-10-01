@@ -62,4 +62,102 @@ head(p1_final, 3)
 In this problem, I cleaned and merged three monthly datasets from FiveThirtyEight:pols-month.csv（counts of national politicians by party, and the party of the sitting president (gop/dem).）snp.csv（S&P stock index closing values.）unemployment.csv（monthly U.S. unemployment rates.）
 After cleaning, I merged them by year and month.
 The final dataset has `r dim_p1[1]` rows and `r dim_p1[2]`columns, covering years from `r yr_min` to `r yr_max`. Key variables include the party of the president, counts of governors/senators/representatives, S&P closing values, and unemployment rates.
+```{r}
+# ---- Problem 2 (final, for 2025 workbook) ----
+library(tidyverse)   # wrangling
+library(readxl)      # Excel I/O
+library(lubridate)   # dates
+library(knitr)       # preview table
 
+# 1) Path (relative, as required)
+path_tw <- "202509 Trash Wheel Collection Data.xlsx"
+stopifnot(file.exists(path_tw))
+
+# 2) Minimal name repair: lower_snake, no blank names, unique
+repair_names <- function(nms) {
+  nms[is.na(nms) | nms == ""] <- paste0("x", seq_len(sum(is.na(nms) | nms == "")))
+  nms <- tolower(nms)
+  nms <- gsub("[^a-z0-9]+", "_", nms)
+  nms <- gsub("^_|_$", "", nms)
+  make.unique(nms, sep = "_")
+}
+
+# 3) Reader for one sheet (meets the spec)
+#    - skip note row(s); standardize names
+#    - drop non-data rows
+#    - round sports balls and cast to integer
+#    - keep tidy columns and add wheel label
+read_wheel <- function(sheet, label) {
+  df <- read_excel(path_tw, sheet = sheet, skip = 1, .name_repair = "minimal")
+  names(df) <- repair_names(names(df))
+
+  # normalize key headers across versions
+  nm <- names(df)
+  dm <- nm[grepl("^dump|dumpster", nm, ignore.case = TRUE)]
+  if (length(dm)) names(df)[match(dm[1], names(df))] <- "dumpster"
+
+  dt <- nm[grepl("date", nm, ignore.case = TRUE)]
+  if (length(dt)) names(df)[match(dt[1], names(df))] <- "date"
+
+  # sports column can be "sports_balls" or just "sports"
+  if ("sports" %in% names(df) && !"sports_balls" %in% names(df)) {
+    names(df)[names(df) == "sports"] <- "sports_balls"
+  }
+  if (!"sports_balls" %in% names(df)) df$sports_balls <- NA_real_
+
+  wt <- nm[grepl("weight.*ton", nm, ignore.case = TRUE)]
+  if (length(wt) && wt[1] != "weight_tons") names(df)[match(wt[1], names(df))] <- "weight_tons"
+
+  vol <- nm[grepl("volume.*yard", nm, ignore.case = TRUE)]
+  if (length(vol) && vol[1] != "volume_cubic_yards") names(df)[match(vol[1], names(df))] <- "volume_cubic_yards"
+
+  df |>
+    mutate(
+      date     = suppressWarnings(as_date(date)),
+      dumpster = coalesce(as.integer(suppressWarnings(as.numeric(dumpster))), row_number())
+    ) |>
+    filter(!is.na(date)) |>
+    mutate(
+      year         = as.integer(year(date)),
+      month        = month(date, label = TRUE, abbr = FALSE),
+      sports_balls = as.integer(round(as.numeric(sports_balls))),
+      wheel        = label
+    ) |>
+    select(any_of(c(
+      "wheel","dumpster","date","year","month",
+      "weight_tons","volume_cubic_yards",
+      "plastic_bottles","polystyrene","cigarette_butts",
+      "glass_bottles","plastic_bags","wrappers",
+      "sports_balls","homes_powered"
+    )))
+}
+
+# 4) Resolve the Gwynnda sheet name (e.g., "Gwynns Falls Trash Wheel")
+sheet_gwyn <- readxl::excel_sheets(path_tw)[grepl("^Gwyn", readxl::excel_sheets(path_tw), ignore.case = TRUE)][1]
+
+# 5) Read/clean three wheels
+mr   <- read_wheel("Mr. Trash Wheel",       "Mr")
+prof <- read_wheel("Professor Trash Wheel", "Professor")
+gwyn <- read_wheel(sheet_gwyn,              "Gwynnda")
+
+# 6) Combine tidy dataset and compute required summaries
+trash <- bind_rows(mr, prof, gwyn) |> arrange(wheel, date)
+
+n_obs  <- nrow(trash)
+n_vars <- ncol(trash)
+
+prof_total_weight <- trash |>
+  filter(wheel == "Professor") |>
+  summarize(total_weight_tons = sum(weight_tons, na.rm = TRUE)) |>
+  pull()
+
+gwyn_cigs_jun2022 <- trash |>
+  filter(wheel == "Gwynnda", month(date) == 6, year(date) == 2022) |>
+  summarize(total_cigs = sum(cigarette_butts, na.rm = TRUE)) |>
+  pull()
+
+# 7) Preview table (optional)
+kable(head(trash, 5), caption = "Preview of combined Trash Wheel data (2025 workbook)")
+
+```
+In this problem, I imported and cleaned the 2025 Trash Wheel Collection Data for Mr. Trash Wheel, Professor Trash Wheel, and Gwynnda. I standardized column names, removed non-data rows, created year and month from dates, and converted the sports balls column to integers. After adding a wheel variable to identify each source, I combined the three datasets into one tidy dataset with `r n_obs` rows and `r n_vars` columns. From this data, Professor Trash Wheel collected a total of `r signif(prof_total_weight,6)` tons of trash, and Gwynnda collected `r gwyn_cigs_jun2022` cigarette butts in June 2022.
