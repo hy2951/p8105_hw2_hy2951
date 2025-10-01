@@ -63,17 +63,17 @@ In this problem, I cleaned and merged three monthly datasets from FiveThirtyEigh
 After cleaning, I merged them by year and month.
 The final dataset has `r dim_p1[1]` rows and `r dim_p1[2]`columns, covering years from `r yr_min` to `r yr_max`. Key variables include the party of the president, counts of governors/senators/representatives, S&P closing values, and unemployment rates.
 ```{r}
-# ---- Problem 2 (final, for 2025 workbook) ----
-library(tidyverse)   # wrangling
-library(readxl)      # Excel I/O
-library(lubridate)   # dates
-library(knitr)       # preview table
+#Problem 2 
+library(tidyverse)   
+library(readxl)     
+library(lubridate)   
+library(knitr)       
 
-# 1) Path (relative, as required)
+# Path 
 path_tw <- "202509 Trash Wheel Collection Data.xlsx"
 stopifnot(file.exists(path_tw))
 
-# 2) Minimal name repair: lower_snake, no blank names, unique
+# Minimal name repair: lower_snake, no blank names, unique
 repair_names <- function(nms) {
   nms[is.na(nms) | nms == ""] <- paste0("x", seq_len(sum(is.na(nms) | nms == "")))
   nms <- tolower(nms)
@@ -82,11 +82,7 @@ repair_names <- function(nms) {
   make.unique(nms, sep = "_")
 }
 
-# 3) Reader for one sheet (meets the spec)
-#    - skip note row(s); standardize names
-#    - drop non-data rows
-#    - round sports balls and cast to integer
-#    - keep tidy columns and add wheel label
+# Reader for one sheet 
 read_wheel <- function(sheet, label) {
   df <- read_excel(path_tw, sheet = sheet, skip = 1, .name_repair = "minimal")
   names(df) <- repair_names(names(df))
@@ -132,15 +128,15 @@ read_wheel <- function(sheet, label) {
     )))
 }
 
-# 4) Resolve the Gwynnda sheet name (e.g., "Gwynns Falls Trash Wheel")
+# 
 sheet_gwyn <- readxl::excel_sheets(path_tw)[grepl("^Gwyn", readxl::excel_sheets(path_tw), ignore.case = TRUE)][1]
 
-# 5) Read/clean three wheels
+# Read/clean three wheels
 mr   <- read_wheel("Mr. Trash Wheel",       "Mr")
 prof <- read_wheel("Professor Trash Wheel", "Professor")
 gwyn <- read_wheel(sheet_gwyn,              "Gwynnda")
 
-# 6) Combine tidy dataset and compute required summaries
+# Combine tidy dataset and compute required summaries
 trash <- bind_rows(mr, prof, gwyn) |> arrange(wheel, date)
 
 n_obs  <- nrow(trash)
@@ -156,8 +152,136 @@ gwyn_cigs_jun2022 <- trash |>
   summarize(total_cigs = sum(cigarette_butts, na.rm = TRUE)) |>
   pull()
 
-# 7) Preview table (optional)
+# Preview table 
 kable(head(trash, 5), caption = "Preview of combined Trash Wheel data (2025 workbook)")
 
 ```
 In this problem, I imported and cleaned the 2025 Trash Wheel Collection Data for Mr. Trash Wheel, Professor Trash Wheel, and Gwynnda. I standardized column names, removed non-data rows, created year and month from dates, and converted the sports balls column to integers. After adding a wheel variable to identify each source, I combined the three datasets into one tidy dataset with `r n_obs` rows and `r n_vars` columns. From this data, Professor Trash Wheel collected a total of `r signif(prof_total_weight,6)` tons of trash, and Gwynnda collected `r gwyn_cigs_jun2022` cigarette butts in June 2022.
+
+```{r}
+
+# Problem 3
+library(tidyverse)
+library(lubridate)
+library(knitr)
+
+# Files 
+zori_path <- "Zip_zori_uc_sfrcondomfr_sm_month_NYC.csv"
+zip_path  <- "Zip Codes.csv"
+stopifnot(file.exists(zori_path), file.exists(zip_path))
+
+# Simple name cleaner
+clean_names <- function(x) {
+  x <- tolower(x)
+  x <- gsub("[^a-z0-9]+", "_", x)
+  gsub("^_|_$", "", x)
+}
+
+# 1) Read ZORI and detect date columns
+zori_raw <- read_csv(zori_path, show_col_types = FALSE)
+names(zori_raw) <- clean_names(names(zori_raw))
+
+if (!"regionname" %in% names(zori_raw)) stop("ZIP column RegionName not found in ZORI.")
+
+# candidate non-id columns to test as dates
+non_id <- setdiff(names(zori_raw),
+                  c("regionname","regionid","city","state","statename","statecodefips",
+                    "countyname","metroname","sizerank","size_rank"))
+
+is_date_name <- function(nm) {
+  !is.na(suppressWarnings(ymd(nm))) || !is.na(suppressWarnings(ym(nm)))
+}
+date_cols <- non_id[vapply(non_id, is_date_name, logical(1))]
+
+
+if (length(date_cols) == 0) {
+  date_cols <- non_id[grepl("^20\\d{2}", non_id)]
+}
+stopifnot(length(date_cols) > 0)
+
+zori <- zori_raw |>
+  rename(zip = regionname) |>
+  pivot_longer(cols = all_of(date_cols), names_to = "date_str", values_to = "rent") |>
+  mutate(
+    date  = coalesce(suppressWarnings(ymd(date_str)), suppressWarnings(ym(date_str))),
+    year  = year(date),
+    month = month(date, label = TRUE, abbr = FALSE),
+    zip   = as.integer(zip)
+  ) |>
+  select(zip, date, year, month, rent)
+
+# 2) Read ZIP metadata and standardize borough & neighborhood
+zip_meta <- read_csv(zip_path, show_col_types = FALSE)
+names(zip_meta) <- clean_names(names(zip_meta))
+
+# zip column
+zip_candidates <- c("zip","zip_code","zipcode","zcta","zcta5")
+zip_col <- zip_candidates[zip_candidates %in% names(zip_meta)][1]
+if (is.na(zip_col)) stop("ZIP column not found in Zip Codes file.")
+zip_meta <- zip_meta |> rename(zip = all_of(zip_col)) |> mutate(zip = as.integer(zip))
+
+
+if ("borough" %in% names(zip_meta)) {
+  # already good
+} else if ("boro" %in% names(zip_meta)) {
+  zip_meta <- zip_meta |> rename(borough = boro)
+} else {
+  county_candidates <- c("county","county_name")
+  county_col <- county_candidates[county_candidates %in% names(zip_meta)][1]
+  if (!is.na(county_col)) {
+    zip_meta <- zip_meta |>
+      mutate(borough = case_when(
+        str_detect(tolower(.data[[county_col]]), "new york") ~ "Manhattan",
+        str_detect(tolower(.data[[county_col]]), "kings")    ~ "Brooklyn",
+        str_detect(tolower(.data[[county_col]]), "queens")   ~ "Queens",
+        str_detect(tolower(.data[[county_col]]), "bronx")    ~ "Bronx",
+        str_detect(tolower(.data[[county_col]]), "richmond") ~ "Staten Island",
+        TRUE ~ NA_character_
+      ))
+  } else {
+    zip_meta$borough <- NA_character_
+  }
+}
+
+# neighborhood column: pick first available
+hood_candidates <- c("neighborhood","neighborhood_name","nta_name",
+                     "po_name","post_office_city","community","community_name")
+hood_col <- hood_candidates[hood_candidates %in% names(zip_meta)][1]
+if (!is.na(hood_col)) {
+  zip_meta <- zip_meta |> mutate(neighborhood = .data[[hood_col]])
+} else {
+  zip_meta$neighborhood <- NA_character_
+}
+
+zip_meta <- zip_meta |> select(zip, borough, neighborhood) |> distinct()
+
+# 3) Merge tidy data
+nyc_rent <- zori |> left_join(zip_meta, by = "zip")
+
+# 4) Summary
+n_obs   <- nrow(nyc_rent)
+n_zips  <- n_distinct(nyc_rent$zip)
+n_hoods <- n_distinct(na.omit(nyc_rent$neighborhood))
+
+# ZIPs present in metadata but not in ZORI
+missing_zips <- setdiff(zip_meta$zip, unique(zori$zip))
+
+# 5) Jan 2020 vs Jan 2021 change and top-10 drops
+change_2020_21 <- nyc_rent |>
+  filter(year %in% c(2020, 2021), month(date) == 1) |>
+  transmute(zip, borough, neighborhood, yyyy = year(date), rent) |>
+  pivot_wider(names_from = yyyy, values_from = rent) |>
+  mutate(change = `2021` - `2020`) |>
+  arrange(change)
+
+top10_drop <- slice_head(change_2020_21, n = 10)
+
+# 6) Preview table
+kable(top10_drop, caption = "Top 10 ZIP codes with largest rent drop (Jan 2020 → Jan 2021)")
+
+
+```
+
+The combined dataset included `r n_obs` observations, covering `r n_zips` unique ZIP codes and `r n_hoods` neighborhoods. Several ZIP codes in the metadata did not appear in the Zillow dataset, likely because Zillow does not track rents for areas with limited data. Comparing January 2020 and January 2021, the 10 ZIP codes with the largest rental price declines were all located in Manhattan, with decreases between about $685 and $913. This reflects the sharp pandemic-era rental downturn concentrated in dense, central Manhattan neighborhoods.
+
+
